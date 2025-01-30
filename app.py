@@ -174,12 +174,12 @@ def get_repository_technologies(ql, org, batch_size=30):
                         if lang_name not in stats_dict:
                             stats_dict[lang_name] = {
                                 "repo_count": 0,
-                                "total_percentage": 0,
-                                "total_lines": 0,
+                                "average_percentage": 0,
+                                "total_size": 0,
                             }
                         stats_dict[lang_name]["repo_count"] += 1
-                        stats_dict[lang_name]["total_percentage"] += percentage
-                        stats_dict[lang_name]["total_lines"] += edge["size"]
+                        stats_dict[lang_name]["average_percentage"] += percentage
+                        stats_dict[lang_name]["total_size"] += edge["size"]
 
                         languages.append(
                             {
@@ -217,9 +217,9 @@ def get_repository_technologies(ql, org, batch_size=30):
         language_averages[lang] = {
             "repo_count": stats["repo_count"],
             "average_percentage": round(
-                stats["total_percentage"] / stats["repo_count"], 3
+                stats["average_percentage"] / stats["repo_count"], 3
             ),
-            "average_lines": round(stats["total_lines"] / stats["repo_count"], 3),
+            "total_size": stats["total_size"],
         }
 
     # Calculate language averages for archived repos
@@ -228,9 +228,9 @@ def get_repository_technologies(ql, org, batch_size=30):
         archived_language_averages[lang] = {
             "repo_count": stats["repo_count"],
             "average_percentage": round(
-                stats["total_percentage"] / stats["repo_count"], 3
+                stats["average_percentage"] / stats["repo_count"], 3
             ),
-            "average_lines": round(stats["total_lines"] / stats["repo_count"], 3),
+            "total_size": stats["total_size"],
         }
 
     # Create final output
