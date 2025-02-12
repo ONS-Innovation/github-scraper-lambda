@@ -338,7 +338,7 @@ def get_repository_technologies(ql, org, batch_size=30):
     return output
 
 
-def handler():
+def handler(event, context):
     """Main function to run the GitHub technology audit"""
     try:
         # Configuration
@@ -381,13 +381,12 @@ def handler():
                 Body=json.dumps(output_data).encode('utf-8'),
                 ContentType='application/json'
             )
-            logger.info(f"Successfully uploaded data to S3 with {output_data['repository_count']} repositories")
+            logger.info(f"Successfully uploaded data to S3 with {len(output_data['repositories'])} repositories")
             
             return {
                 "statusCode": 200,
                 "body": json.dumps({
                     "message": "Successfully analyzed and uploaded repository technologies",
-                    "repositories_processed": output_data['repository_count']
                 })
             }
         except Exception as e:
