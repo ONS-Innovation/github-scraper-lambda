@@ -25,9 +25,16 @@ export GITHUB_APP_CLIENT_ID=<CLIENT_ID>
 export AWS_DEFAULT_REGION=<REGION>
 export AWS_SECRET_NAME=/<env>/github-tooling-suite/<onsdigital/ons-innovation>
 export GITHUB_ORG=<onsdigital/ons-innovation>
+export SOURCE_BUCKET=<sdp-dev-tech-radar>
+export SOURCE_KEY=<repositories.json>
 ```
 
-Run:
+To run locally, you need to add this code to the end of the file in app.py:
+```python
+handler(None, None)
+```
+
+Then you can run the script locally:
 ```bash
 make run
 ```
