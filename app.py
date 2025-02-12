@@ -335,12 +335,7 @@ def get_repository_technologies(ql, org, batch_size=30):
         },
     }
 
-    # Write everything to file at once
-    with open("repositories.json", "w") as file:
-        json.dump(output, file, indent=2)
-        file.write("\n")
-
-    return all_repos
+    return output
 
 
 def main():
@@ -350,7 +345,11 @@ def main():
         org = os.getenv("GITHUB_ORG")
         client_id = os.getenv("GITHUB_APP_CLIENT_ID")
         secret_name = os.getenv("AWS_SECRET_NAME")
-        secret_region = os.getenv("AWS_DEFAULT_REGION")
+        secret_region = os.getenv("AWS_DEFAULT_REGION", "eu-west-2")
+        bucket_name = os.getenv("SOURCE_BUCKET", "sdp-dev-tech-radar")
+        bucket_key = os.getenv("SOURCE_KEY", "repositories.json")
+
+        logger.info(f"Using: {org}, client_id: {client_id[:2]}...{client_id[-2:]}, secret: {secret_name}, region: {secret_region}, bucket: {bucket_name}, key: {bucket_key}")
 
         logger.info("Starting GitHub technology audit")
 
@@ -371,11 +370,36 @@ def main():
         ql = github_graphql_interface(str(token[0]))
 
         # Get repository technology information
-        get_repository_technologies(ql, org)
+        output_data = get_repository_technologies(ql, org)
+
+        # Upload to S3
+        try:
+            s3 = boto3.client('s3')
+            s3.put_object(
+                Bucket=bucket_name,
+                Key=bucket_key,
+                Body=json.dumps(output_data).encode('utf-8'),
+                ContentType='application/json'
+            )
+            logger.info(f"Successfully uploaded data to S3 with {output_data['repository_count']} repositories")
+            
+            return {
+                "statusCode": 200,
+                "body": json.dumps({
+                    "message": "Successfully analyzed and uploaded repository technologies",
+                    "repositories_processed": output_data['repository_count']
+                })
+            }
+        except Exception as e:
+            logger.error(f"Failed to upload to S3: {str(e)}")
+            return {
+                "statusCode": 500,
+                "body": json.dumps(f"Failed to upload to S3: {str(e)}")
+            }
 
     except Exception as e:
-        logger.error("Execution failed: %s", str(e))
-
-
-if __name__ == "__main__":
-    main()
+        logger.error(f"Execution failed: {str(e)}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps(f"Failed to execute: {str(e)}")
+        }
