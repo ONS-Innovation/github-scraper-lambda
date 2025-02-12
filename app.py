@@ -338,7 +338,7 @@ def get_repository_technologies(ql, org, batch_size=30):
     return output
 
 
-def main():
+def handler():
     """Main function to run the GitHub technology audit"""
     try:
         # Configuration
