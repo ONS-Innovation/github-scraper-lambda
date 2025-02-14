@@ -1,0 +1,4 @@
+bucket         = "sdp-dev-tf-state"
+key            = "sdp-dev-github-scraper-lambda/terraform.tfstate"
+region         = "eu-west-2"
+dynamodb_table = "terraform-state-lock"

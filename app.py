@@ -26,9 +26,11 @@ Output:
 import sys
 import os
 import json
+import time
 import logging
 import datetime
 import boto3
+from functools import wraps
 from github_api_toolkit import github_graphql_interface, get_token_as_installation
 
 # Set up logging
@@ -46,9 +48,61 @@ stdout_handler.setFormatter(
 )
 logger.addHandler(stdout_handler)
 
+def find_keywords_in_file(file, keywords_list):
+    """Find keywords in a file
 
-def get_repository_technologies(ql, org, batch_size=30):
-    """Gets technology information for all repositories in an organization"""
+    Args:
+        file (str): File contents that you are interested in searching
+        keywords_list (list): List of keywords that you want to search through the file
+
+    Returns:
+        list: List of keywords that were found in the file
+    """    
+    keywords = []
+    if file is None:
+        return []
+
+    for keyword in keywords_list:
+        if (keyword.lower() in file.lower()) and (keyword.lower() not in keywords):
+            keywords.append(keyword)
+    return keywords
+
+def retry_on_error(max_retries=5):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            fail_count = 0
+            while fail_count < max_retries:
+                result = func(*args, **kwargs)
+                if not result.ok:
+                    logger.error("GraphQL query failed: {}", result.status_code)
+                    fail_count += 1
+                    logger.info('RETRYING...')
+                    time.sleep(1)  # Optional: Add delay between retries if desired
+                else:
+                    return result
+            # If we reached max retries, log the failure and return None or raise an exception
+            logger.error("Exceeded maximum retries. Query failed.")
+            return None
+        return wrapper
+    return decorator
+
+@retry_on_error(max_retries=5)
+def make_request(ql, query, variables):
+    """Make a GraphQL request"""
+    return ql.make_ql_request(query, variables)
+
+def get_repository_technologies(ql, org, batch_size=5):
+    """Get technology information for all repositories in an organization
+
+    Args:
+        ql (github_graphql_interface): GraphQL interface object
+        org (str): GitHub organization name
+        batch_size (int, optional): How many respositories to be processed in one request. Defaults to 5.
+
+    Returns:
+        list: List of repositories
+    """    
 
     query = """
     query($org: String!, $limit: Int!, $cursor: String) {
@@ -85,6 +139,24 @@ def get_repository_technologies(ql, org, batch_size=30):
               }
               totalSize
             }
+            object(expression: "HEAD:") {
+          ... on Tree {
+            entries {
+              name
+              type
+              object {
+                ... on Blob {
+                    text
+                }
+                ... on Tree {
+                    entries {
+                        name
+                    }
+                }
+              }
+            }
+          }
+        }
           }
         }
       }
@@ -107,15 +179,11 @@ def get_repository_technologies(ql, org, batch_size=30):
     archived_internal = 0
     language_stats = {}
     archived_language_stats = {}  # New dictionary for archived repos
-
+                    
     while has_next_page:
         variables = {"org": org, "limit": batch_size, "cursor": cursor}
-        result = ql.make_ql_request(query, variables)
 
-        if not result.ok:
-            logger.error("GraphQL query failed: {}", result.status_code)
-            break
-
+        result = make_request(ql, query, variables)
         data = result.json()
         if "errors" in data:
             logger.error("GraphQL query returned errors: {}", data["errors"])
@@ -163,6 +231,8 @@ def get_repository_technologies(ql, org, batch_size=30):
                         lang_name = edge["node"]["name"]
                         if lang_name == "HCL":
                             IAC.append("Terraform")
+                        if lang_name == "Dockerfile":
+                            IAC.append("Docker")
                         percentage = (edge["size"] / total_size) * 100
 
                         # Choose which statistics dictionary to update based on archive status
@@ -174,12 +244,12 @@ def get_repository_technologies(ql, org, batch_size=30):
                         if lang_name not in stats_dict:
                             stats_dict[lang_name] = {
                                 "repo_count": 0,
-                                "total_percentage": 0,
-                                "total_lines": 0,
+                                "average_percentage": 0,
+                                "total_size": 0,
                             }
                         stats_dict[lang_name]["repo_count"] += 1
-                        stats_dict[lang_name]["total_percentage"] += percentage
-                        stats_dict[lang_name]["total_lines"] += edge["size"]
+                        stats_dict[lang_name]["average_percentage"] += percentage
+                        stats_dict[lang_name]["total_size"] += edge["size"]
 
                         languages.append(
                             {
@@ -188,6 +258,54 @@ def get_repository_technologies(ql, org, batch_size=30):
                                 "percentage": percentage,
                             }
                         )
+                
+                with open('keywords.json', 'r') as file:
+                    keywords_json = json.load(file)
+
+                documentation_list = keywords_json["keywords"]["documentation"]
+                cloud_services_list = keywords_json["keywords"]["cloud_services"]
+                frameworks_list = keywords_json["keywords"]["frameworks"]
+                ci_cd = []
+                docs = []
+                cloud = []
+                if repo["object"] is not None:
+                    # json.dump(repo["object"]["entries"], file, indent=4)
+                    # repo["object"]["entries"] is a LIST of dictionaries
+                    # Get README content
+                    readme_content = pyproject_content = package_json_content = None
+                    if repo["object"]["entries"]:
+                        for entry in repo["object"]["entries"]:
+                            if entry["name"].lower() == "readme.md":
+                                readme_content = entry["object"]["text"]
+                            if entry["name"].lower() == "pyproject.toml":
+                                pyproject_content = entry["object"]["text"]
+                    
+                    frameworks_pyproject = find_keywords_in_file(pyproject_content, frameworks_list)
+                    frameworks_package_json = find_keywords_in_file(package_json_content, frameworks_list)
+                    frameworks = frameworks_pyproject + frameworks_package_json
+                    # Check if "confluence" is present in README
+                    if readme_content is not None:
+                        for doc, cl in zip(documentation_list, cloud_services_list):
+                            if doc.lower() in readme_content.lower():
+                                docs.append(doc)
+                            if cl.lower() in readme_content.lower():
+                                cloud.append(cl)
+                    
+                    # TODO: Extremely hardcoded, will need to write a general tree traversal to find things in all directories
+                    if repo["object"]["entries"]:
+                        for entry in repo["object"]["entries"]:
+                            if entry["name"] == ".github":
+                                if entry["object"]["entries"]:
+                                    for gh_entry in entry["object"]["entries"]:
+                                        if gh_entry["name"] == "workflows":
+                                            ci_cd.append("GitHub Actions")
+                                            break
+                            if entry["name"] == "ci":
+                                if entry["object"]["entries"]:
+                                    for ci_entry in entry["object"]["entries"]:
+                                        if "pipeline.yml" in ci_entry["name"]:
+                                            ci_cd.append("Concourse")
+                                            break
 
                 repo_info = {
                     "name": repo["name"],
@@ -195,8 +313,14 @@ def get_repository_technologies(ql, org, batch_size=30):
                     "visibility": repo["visibility"],
                     "is_archived": is_archived,
                     "last_commit": last_commit_date,
-                    "technologies": {"languages": languages, "IAC": IAC},
-                }
+                    "technologies": {
+                                    "languages": languages, 
+                                    "IAC": IAC, 
+                                    "docs": docs, "cloud": cloud, 
+                                    "frameworks": frameworks, 
+                                    "ci_cd": ci_cd
+                                },
+                    }
 
                 all_repos.append(repo_info)
 
@@ -217,9 +341,9 @@ def get_repository_technologies(ql, org, batch_size=30):
         language_averages[lang] = {
             "repo_count": stats["repo_count"],
             "average_percentage": round(
-                stats["total_percentage"] / stats["repo_count"], 3
+                stats["average_percentage"] / stats["repo_count"], 3
             ),
-            "average_lines": round(stats["total_lines"] / stats["repo_count"], 3),
+            "total_size": stats["total_size"],
         }
 
     # Calculate language averages for archived repos
@@ -228,9 +352,9 @@ def get_repository_technologies(ql, org, batch_size=30):
         archived_language_averages[lang] = {
             "repo_count": stats["repo_count"],
             "average_percentage": round(
-                stats["total_percentage"] / stats["repo_count"], 3
+                stats["average_percentage"] / stats["repo_count"], 3
             ),
-            "average_lines": round(stats["total_lines"] / stats["repo_count"], 3),
+            "total_size": stats["total_size"],
         }
 
     # Create final output
@@ -336,21 +460,27 @@ def get_repository_technologies(ql, org, batch_size=30):
     }
 
     # Write everything to file at once
+    """
     with open("repositories.json", "w") as file:
         json.dump(output, file, indent=2)
         file.write("\n")
+    """
 
-    return all_repos
+    return all_repos, output
 
 
-def main():
-    """Main function to run the GitHub technology audit"""
+def handler(event, context):
+    """AWS Lambda Entrypoint"""
     try:
         # Configuration
-        org = os.getenv("GITHUB_ORG")
-        client_id = os.getenv("GITHUB_APP_CLIENT_ID")
-        secret_name = os.getenv("AWS_SECRET_NAME")
-        secret_region = os.getenv("AWS_DEFAULT_REGION")
+        try:
+            org = os.getenv("GITHUB_ORG")
+            client_id = os.getenv("GITHUB_APP_CLIENT_ID")
+            secret_name = os.getenv("AWS_SECRET_NAME")
+            secret_region = os.getenv("AWS_DEFAULT_REGION")
+            bucket_name = os.getenv("SOURCE_BUCKET")
+        except Exception as e:
+            return logger.error("%s", str(e))
 
         logger.info("Starting GitHub technology audit")
 
@@ -371,11 +501,26 @@ def main():
         ql = github_graphql_interface(str(token[0]))
 
         # Get repository technology information
-        get_repository_technologies(ql, org)
+        repos, output = get_repository_technologies(ql, org)
+        
+        s3 = boto3.client('s3')
+        s3.put_object(
+            Bucket=bucket_name,
+            Key='repositories.json',
+            Body=json.dumps(output, indent=4).encode("utf-8"),
+        )
+        # s3.upload_file('repositories.json', bucket_name, 'repositories.json')
+        # Print or save results
+        output = {
+            "message": "Successfully analyzed repository technologies",
+            "repository_count": len(repos),
+            "repositories": repos,
+        }
 
     except Exception as e:
         logger.error("Execution failed: %s", str(e))
 
+# Uncomment the following line to run the function locally
 
 if __name__ == "__main__":
-    main()
+    handler(None, None)

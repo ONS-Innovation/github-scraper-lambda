@@ -1,0 +1,8 @@
+{
+    "keywords": {
+        "documentation": ["Confluence", "MKDocs", "Sphinx", "ReadTheDocs"],
+        "cloud_services": ["AWS", "Azure", "GCP"],
+        "frameworks": ["React", "Angular", "Vue", "Django", "Streamlit", "Flask", "Spring", "Hibernate", "Express", "Next.js", "Play", "Akka", "Lagom"],
+        "ci_cd": ["Jenkins", "GitHub Actions", "GitLab CI", "CircleCI", "Travis CI", "Azure DevOps", "Concourse"]
+    }
+}
